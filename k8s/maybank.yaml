@@ -1,0 +1,180 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: staging-namespace
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ssl-cert
+  namespace: staging-namespace
+data:
+  test: test
+  # Replace with the actual certificate and key data
+  # tls.crt: BASE64_ENCODED_CERT
+  # tls.key: BASE64_ENCODED_KEY
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: staging-secret
+  namespace: staging-namespace
+data:
+  test-key: test
+  # Replace with the actual secret key data
+  # secret-key: BASE64_ENCODED_SECRET_VALUE
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: staging-config-map
+  namespace: staging-namespace
+data:
+  # This will create a file named `config.prop` with the specified content
+  config.prop: |
+    key1=value1
+    key2=value2
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: staging-ingress
+  namespace: staging-namespace
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  tls:
+    - secretName: ssl-cert
+  rules:
+    - host: example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: staging-service
+                port:
+                  number: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: staging-service
+  namespace: staging-namespace
+spec:
+  selector:
+    app: staging-app
+    test: test-app1
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: staging-deployment
+  namespace: staging-namespace
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: staging-app
+  template:
+    metadata:
+      labels:
+        app: staging-app
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - staging-app
+              topologyKey: "kubernetes.io/hostname"
+      containers:
+        - name: staging-container
+          image: busybox
+          command:
+            - "sh"
+            - "-c"
+            - "while true; do sleep 6000; done"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "250m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+          env:
+            - name: STAGING_ENV
+              valueFrom:
+                secretKeyRef:
+                  name: staging-secret
+                  key: test-key
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/config
+            # - name: efs-volume
+            #   mountPath: /mnt/efs
+      volumes:
+        - name: config-volume
+          configMap:
+            name: staging-config-map
+        - name: efs-volume
+          persistentVolumeClaim:
+            claimName: efs-pvc
+---
+apiVersion: autoscaling/v1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: staging-hpa
+  namespace: staging-namespace
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: staging-deployment
+  minReplicas: 1
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 60
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: efs-pv
+spec:
+  capacity:
+    storage: 10Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: efs-sc
+  csi:
+    driver: efs.csi.aws.com
+    volumeHandle: fs-0d0f7e8d9f8b8f9f # Replace with the actual EFS volume ID
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: efs-pvc
+  namespace: staging-namespace
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: efs-sc
+provisioner: efs.csi.aws.com
+ 
